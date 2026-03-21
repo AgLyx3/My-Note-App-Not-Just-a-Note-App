@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Notes MVP UI Review Prototype</title>
+    <style>
+      :root {
+        --primary: #2563eb;
+        --accent: #f97316;
+        --bg: #f8fafc;
+        --text: #1e293b;
+        --ok: #16a34a;
+        --warn: #d97706;
+      }
+      body { margin: 0; font-family: "Atkinson Hyperlegible", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+      .wrap { display: grid; grid-template-columns: minmax(280px, 420px) minmax(280px, 1fr); gap: 16px; padding: 16px; align-items: start; }
+      .phone { background: #fff; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,.08); padding: 14px; min-height: 680px; position: sticky; top: 12px; }
+      .h { font-weight: 700; margin-bottom: 12px; }
+      .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
+      .chip { display:inline-block; font-size: 12px; padding: 3px 8px; border-radius: 999px; margin-right: 6px; }
+      .likely { background: #dcfce7; color: #166534; }
+      .possible { background: #ffedd5; color: #9a3412; }
+      .uncertain { background: #fef3c7; color: #92400e; }
+      .cta { background: var(--accent); color: #fff; border: 0; padding: 10px 14px; border-radius: 10px; width: 100%; font-weight: 700; }
+      .option { display:flex; justify-content:space-between; align-items:center; border:1px solid #e2e8f0; border-radius:10px; padding:9px; margin-bottom:8px; background: #fff; width: 100%; text-align: left; cursor: pointer; }
+      .option.active { border-color: var(--primary); background: #eff6ff; }
+      .caption { font-size: 12px; opacity: .75; margin-top: 4px; }
+      .stack { display: flex; flex-direction: column; gap: 8px; }
+      .hidden { display: none; }
+      .row { display: flex; gap: 8px; align-items: center; }
+      .input { border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px; width: 100%; font: inherit; }
+      .surface { background: #fff; border-radius: 16px; box-shadow: 0 6px 20px rgba(0,0,0,.06); padding: 14px; }
+      .kpi { font-size: 12px; border: 1px dashed #cbd5e1; border-radius: 10px; padding: 8px; }
+      .toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: #0f172a; color: #fff; border-radius: 10px; padding: 10px 14px; display: none; gap: 8px; align-items: center; }
+      .toast.show { display: flex; }
+      .ghost { background: #fff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 8px; padding: 4px 8px; font-weight: 700; cursor: pointer; }
+      @media (max-width: 600px) {
+        .wrap { grid-template-columns: 1fr; gap: 12px; padding: 12px; }
+        .phone { min-height: auto; position: static; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="phone">
+        <div class="h" id="screen-title">Home Feed</div>
+        <div id="screen-home" class="stack">
+          <div class="card">
+            <strong>Travel Plans</strong>
+            <div class="caption" id="travel-updated">Updated 2m ago</div>
+            <div class="caption" id="travel-preview">Need to book flights for Tokyo...</div>
+          </div>
+          <div class="card">
+            <strong>Work Sprint</strong>
+            <div class="caption">Updated 18m ago</div>
+            <div class="caption">Follow up with PM on scope...</div>
+          </div>
+          <div class="card">
+            <strong>Personal Admin</strong>
+            <div class="caption">Updated 1h ago</div>
+            <div class="caption">Renew driver license reminder...</div>
+          </div>
+          <button id="capture-btn" class="cta">Capture</button>
+        </div>
+
+        <div id="screen-capture" class="stack hidden">
+          <div class="row">
+            <span class="chip likely">Text</span>
+            <span class="chip">Image</span>
+          </div>
+          <div class="caption">Paste links directly in text. The model will enrich link content automatically.</div>
+          <textarea id="capture-input" class="input" rows="5">Need to renew passport before June trip to Seoul and compare flight prices.</textarea>
+          <button id="continue-btn" class="cta">Continue</button>
+        </div>
+
+        <div id="screen-review" class="stack hidden">
+          <div class="caption">Place in collection</div>
+          <button class="option active" data-selection="travel">
+            <div>
+              <strong>Travel Plans</strong>
+              <div class="caption">Likely match</div>
+            </div>
+            <span class="chip likely">0.82</span>
+          </button>
+          <button class="option" data-selection="admin">
+            <div>
+              <strong>Personal Admin</strong>
+              <div class="caption">Possible match</div>
+            </div>
+            <span class="chip possible">0.55</span>
+          </button>
+          <button class="option" data-selection="new">
+            <div>
+              <strong>Create new: Seoul Trip</strong>
+              <div class="caption">Always available</div>
+            </div>
+          </button>
+          <button id="confirm-btn" class="cta">Confirm</button>
+        </div>
+
+        <div id="screen-low-confidence" class="stack hidden">
+          <div class="caption">Place in collection (uncertain)</div>
+          <button class="option active" data-selection="new">
+            <div>
+              <strong>Create new: Meal Prep App</strong>
+              <div class="caption">Uncertain; defaults to create-new</div>
+            </div>
+            <span class="chip uncertain">0.31</span>
+          </button>
+          <button class="option" data-selection="learning">
+            <div>
+              <strong>Learning</strong>
+              <div class="caption">Possible match</div>
+            </div>
+          </button>
+          <button id="confirm-low-btn" class="cta">Confirm</button>
+        </div>
+
+        <div id="screen-collection-detail" class="stack hidden">
+          <div class="card">
+            <strong>Travel Plans</strong>
+            <div class="caption">Collection detail</div>
+          </div>
+          <div class="card">
+            <strong id="entry-title">Need to renew passport before June trip to Seoul...</strong>
+            <div class="caption">Added just now</div>
+            <div class="row" style="margin-top:8px;">
+              <button id="move-entry-btn" class="ghost">Move</button>
+            </div>
+          </div>
+          <button id="back-home-btn" class="cta">Back to Home</button>
+        </div>
+
+        <div id="screen-move-review" class="stack hidden">
+          <div class="caption">Move to collection</div>
+          <button class="option active" data-move-selection="admin">
+            <div>
+              <strong>Personal Admin</strong>
+              <div class="caption">Likely better fit</div>
+            </div>
+            <span class="chip likely">0.77</span>
+          </button>
+          <button class="option" data-move-selection="travel">
+            <div>
+              <strong>Travel Plans</strong>
+              <div class="caption">Current collection</div>
+            </div>
+            <span class="chip possible">0.51</span>
+          </button>
+          <button class="option" data-move-selection="new">
+            <div>
+              <strong>Create new: Visa Prep</strong>
+              <div class="caption">Always available</div>
+            </div>
+          </button>
+          <button id="confirm-move-btn" class="cta">Confirm Move</button>
+        </div>
+      </section>
+
+      <section class="surface stack">
+        <div class="h">Flow Controls</div>
+        <div class="row">
+          <button class="ghost" id="goto-home">Home</button>
+          <button class="ghost" id="goto-capture">Capture</button>
+          <button class="ghost" id="goto-review">Review</button>
+          <button class="ghost" id="goto-low">Low-confidence</button>
+          <button class="ghost" id="goto-detail">Collection detail</button>
+          <button class="ghost" id="goto-move">Move review</button>
+        </div>
+        <div class="kpi">
+          <strong>Interaction goals</strong><br />
+          - <= 2 taps from input complete to confirm<br />
+          - correction faster than initial routing<br />
+          - create-new always visible
+        </div>
+        <div class="kpi">
+          <strong>Current selection:</strong> <span id="current-selection">travel</span><br />
+          <strong>Last action:</strong> <span id="last-action">none</span>
+        </div>
+      </section>
+    </div>
+    <div class="toast" id="toast">
+      <span id="toast-text">Placed in Travel Plans</span>
+      <button id="undo-btn" class="ghost">Undo</button>
+    </div>
+    <script>
+      const screens = {
+        home: document.getElementById("screen-home"),
+        capture: document.getElementById("screen-capture"),
+        review: document.getElementById("screen-review"),
+        low: document.getElementById("screen-low-confidence"),
+        detail: document.getElementById("screen-collection-detail"),
+        move: document.getElementById("screen-move-review")
+      };
+      const title = document.getElementById("screen-title");
+      const toast = document.getElementById("toast");
+      const toastText = document.getElementById("toast-text");
+      const currentSelectionEl = document.getElementById("current-selection");
+      const lastActionEl = document.getElementById("last-action");
+      const travelUpdated = document.getElementById("travel-updated");
+      const travelPreview = document.getElementById("travel-preview");
+      const entryTitle = document.getElementById("entry-title");
+      let currentSelection = "travel";
+      let moveSelection = "admin";
+      let pendingText = "";
+
+      function showScreen(name) {
+        Object.entries(screens).forEach(([key, el]) => {
+          el.classList.toggle("hidden", key !== name);
+        });
+        const names = {
+          home: "Home Feed",
+          capture: "Capture Entry",
+          review: "Quick Review Sheet",
+          low: "Low-confidence review state",
+          detail: "Collection Detail",
+          move: "Move Review Sheet"
+        };
+        title.textContent = names[name];
+      }
+
+      function selectOption(selection, containerId) {
+        currentSelection = selection;
+        currentSelectionEl.textContent = selection;
+        const options = document.querySelectorAll(`#${containerId} .option`);
+        options.forEach((button) => {
+          button.classList.toggle("active", button.dataset.selection === selection);
+        });
+      }
+
+      function showToast(message) {
+        toastText.textContent = message;
+        toast.classList.add("show");
+      }
+
+      function hideToast() {
+        toast.classList.remove("show");
+      }
+
+      function confirmPlacement() {
+        const input = document.getElementById("capture-input");
+        pendingText = input.value.trim();
+        const labelMap = {
+          travel: "Travel Plans",
+          admin: "Personal Admin",
+          new: "Seoul Trip",
+          learning: "Learning"
+        };
+        const chosen = labelMap[currentSelection] || "New Collection";
+        lastActionEl.textContent = `confirmed -> ${chosen}`;
+        entryTitle.textContent = (pendingText || "New entry").slice(0, 56) + ((pendingText || "").length > 56 ? "..." : "");
+        if (currentSelection === "travel" && pendingText) {
+          travelUpdated.textContent = "Updated just now";
+          travelPreview.textContent = pendingText.slice(0, 42) + (pendingText.length > 42 ? "..." : "");
+        }
+        showScreen("home");
+        showToast(`Placed in ${chosen}`);
+      }
+
+      function selectMoveOption(selection) {
+        moveSelection = selection;
+        currentSelectionEl.textContent = `move:${selection}`;
+        const options = document.querySelectorAll("#screen-move-review .option");
+        options.forEach((button) => {
+          button.classList.toggle("active", button.dataset.moveSelection === selection);
+        });
+      }
+
+      function confirmMove() {
+        const moveMap = {
+          admin: "Personal Admin",
+          travel: "Travel Plans",
+          new: "Visa Prep"
+        };
+        const chosen = moveMap[moveSelection] || "New Collection";
+        lastActionEl.textContent = `moved -> ${chosen}`;
+        showScreen("detail");
+        showToast(`Moved to ${chosen}`);
+      }
+
+      document.getElementById("capture-btn").addEventListener("click", () => showScreen("capture"));
+      document.getElementById("continue-btn").addEventListener("click", () => {
+        selectOption("travel", "screen-review");
+        showScreen("review");
+      });
+      document.getElementById("confirm-btn").addEventListener("click", confirmPlacement);
+      document.getElementById("confirm-low-btn").addEventListener("click", confirmPlacement);
+      document.getElementById("undo-btn").addEventListener("click", () => {
+        lastActionEl.textContent = "undo -> restored previous collection";
+        hideToast();
+      });
+
+      document.getElementById("goto-home").addEventListener("click", () => showScreen("home"));
+      document.getElementById("goto-capture").addEventListener("click", () => showScreen("capture"));
+      document.getElementById("goto-review").addEventListener("click", () => showScreen("review"));
+      document.getElementById("goto-low").addEventListener("click", () => {
+        selectOption("new", "screen-low-confidence");
+        showScreen("low");
+      });
+      document.getElementById("goto-detail").addEventListener("click", () => showScreen("detail"));
+      document.getElementById("goto-move").addEventListener("click", () => {
+        selectMoveOption("admin");
+        showScreen("move");
+      });
+      document.getElementById("move-entry-btn").addEventListener("click", () => {
+        selectMoveOption("admin");
+        showScreen("move");
+      });
+      document.getElementById("confirm-move-btn").addEventListener("click", confirmMove);
+      document.getElementById("back-home-btn").addEventListener("click", () => showScreen("home"));
+
+      document.querySelectorAll("#screen-review .option").forEach((el) => {
+        el.addEventListener("click", () => selectOption(el.dataset.selection, "screen-review"));
+      });
+      document.querySelectorAll("#screen-low-confidence .option").forEach((el) => {
+        el.addEventListener("click", () => selectOption(el.dataset.selection, "screen-low-confidence"));
+      });
+      document.querySelectorAll("#screen-move-review .option").forEach((el) => {
+        el.addEventListener("click", () => selectMoveOption(el.dataset.moveSelection));
+      });
+
+      showScreen("home");
+    </script>
+  </body>
+  </html>
