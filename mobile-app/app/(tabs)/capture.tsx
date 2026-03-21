@@ -1,9 +1,10 @@
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Text, TextInput, View } from "react-native";
 import Toast from "react-native-toast-message";
-import { createCapture } from "../../src/api/client";
+import { createCapture, extractTextFromImage } from "../../src/api/client";
 import { MAX_CAPTURE_TEXT_CHARS } from "../../src/constants/capture-limits";
 import { useCaptureStore } from "../../src/store/capture-store";
 import { Card, PrimaryButton, Screen, SectionTitle, SegmentedControl } from "../../src/ui/primitives";
@@ -21,10 +22,17 @@ function isTextOverLimit(trimmed: string): boolean {
   return trimmed.length > MAX_CAPTURE_TEXT_CHARS;
 }
 
-/** Stub until OCR/LLM extraction is wired; replace with API response. */
-async function extractTextFromImageStub(_imageUri: string): Promise<string> {
-  await new Promise((r) => setTimeout(r, 600));
-  return "Sample extracted text — connect OCR or vision API to replace this placeholder.";
+function guessMimeType(uri: string): "image/jpeg" | "image/png" | "image/webp" | "image/gif" {
+  const lower = uri.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "image/jpeg";
+}
+
+async function extractTextFromLocalImage(uri: string): Promise<string> {
+  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
+  return extractTextFromImage(base64, guessMimeType(uri));
 }
 
 export default function CaptureTabScreen() {
@@ -57,7 +65,7 @@ export default function CaptureTabScreen() {
     if (!imagePath) return;
     try {
       setExtracting(true);
-      const text = await extractTextFromImageStub(imagePath);
+      const text = await extractTextFromLocalImage(imagePath);
       setExtractedText(text);
     } catch (error) {
       Alert.alert("Extract failed", error instanceof Error ? error.message : "Unknown error");

@@ -123,3 +123,15 @@ export async function deleteEntry(entryId: string): Promise<void> {
     method: "DELETE"
   });
 }
+
+/** Server-side OpenAI vision (POST /v1/extract-text). `imageBase64` is raw base64 (no data: prefix). */
+export async function extractTextFromImage(
+  imageBase64: string,
+  mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+): Promise<string> {
+  const result = await request<{ text: string }>("/extract-text", {
+    method: "POST",
+    body: JSON.stringify({ image_base64: imageBase64, mime_type: mimeType })
+  });
+  return result.text;
+}
