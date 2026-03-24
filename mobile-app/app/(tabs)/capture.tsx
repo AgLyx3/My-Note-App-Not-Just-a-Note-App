@@ -2,7 +2,16 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, Pressable, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Keyboard,
+  Pressable,
+  Text,
+  TextInput,
+  TouchableWithoutFeedback,
+  View
+} from "react-native";
 import Toast from "react-native-toast-message";
 import { createCapture, extractTextFromImage } from "../../src/api/client";
 import { MAX_CAPTURE_TEXT_CHARS } from "../../src/constants/capture-limits";
@@ -121,16 +130,17 @@ export default function CaptureTabScreen() {
       : Boolean(imagePath) && extractedText.trim().length > 0;
 
   return (
-    <Screen>
-      <SectionTitle title="Capture" subtitle="Add text or image. Links in text are enriched automatically." />
-      <SegmentedControl
-        value={mode}
-        onChange={(value) => setMode(value as "text" | "image")}
-        options={[
-          { label: "Text", value: "text" },
-          { label: "Image", value: "image" }
-        ]}
-      />
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <Screen>
+        <SectionTitle title="Capture" subtitle="Add text or image. Links in text are enriched automatically." />
+        <SegmentedControl
+          value={mode}
+          onChange={(value) => setMode(value as "text" | "image")}
+          options={[
+            { label: "Text", value: "text" },
+            { label: "Image", value: "image" }
+          ]}
+        />
 
       {mode === "text" ? (
         <Card>
@@ -228,12 +238,13 @@ export default function CaptureTabScreen() {
         </Pressable>
       ) : null}
 
-      <PrimaryButton
-        className="mt-auto"
-        onPress={onContinue}
-        disabled={!canContinue || loading}
-        label={loading ? "Loading..." : "Continue"}
-      />
-    </Screen>
+        <PrimaryButton
+          className="mt-auto"
+          onPress={onContinue}
+          disabled={!canContinue || loading}
+          label={loading ? "Loading..." : "Continue"}
+        />
+      </Screen>
+    </TouchableWithoutFeedback>
   );
 }

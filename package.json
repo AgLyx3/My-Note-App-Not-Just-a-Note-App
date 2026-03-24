@@ -11,7 +11,8 @@
     "backend",
     "mobile-app",
     "frontend",
-    "ranking-lab"
+    "ranking-lab",
+    "ops-dashboard"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -19,6 +20,7 @@
     "test": "npm run test --workspaces --if-present",
     "dev:backend": "npm run dev --workspace backend",
     "dev:lab": "npm run dev --workspace ranking-lab",
+    "dev:ops-dashboard": "npm run dev --workspace ops-dashboard",
     "start:mobile": "npm run start --workspace mobile-app",
     "test:backend": "npm run test --workspace backend",
     "test:frontend": "npm run test --workspace ai-note-frontend"

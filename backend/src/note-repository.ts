@@ -1,4 +1,6 @@
 import type { CreateCaptureBody } from "./capture-schema.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 export interface CaptureEntry {
   id: string;
@@ -122,6 +124,20 @@ export interface InMemoryNoteRepositoryOptions {
    * @default true
    */
   seedDefaultCollections?: boolean;
+  /**
+   * Optional JSON file path for persisting repository state across process restarts.
+   * When provided, mutations are written to disk immediately.
+   */
+  persistenceFilePath?: string;
+}
+
+interface PersistedNoteStateV1 {
+  version: 1;
+  entries: StoredEntry[];
+  collections: StoredCollection[];
+  placements: StoredPlacement[];
+  latestReversibleByEntry: Array<{ entryId: string; placementId: string }>;
+  seededUsers: string[];
 }
 
 export class InMemoryNoteRepository implements NoteRepository {
@@ -131,18 +147,59 @@ export class InMemoryNoteRepository implements NoteRepository {
   private latestReversibleByEntry = new Map<string, string>();
   private seededUsers = new Set<string>();
 
-  constructor(private readonly initOptions: InMemoryNoteRepositoryOptions = {}) {}
+  constructor(private readonly initOptions: InMemoryNoteRepositoryOptions = {}) {
+    this.loadFromDisk();
+  }
+
+  private loadFromDisk() {
+    const filePath = this.initOptions.persistenceFilePath;
+    if (!filePath || !existsSync(filePath)) return;
+    try {
+      const raw = readFileSync(filePath, "utf8");
+      const parsed = JSON.parse(raw) as PersistedNoteStateV1;
+      if (!parsed || parsed.version !== 1) return;
+      this.entries = new Map(parsed.entries.map((row) => [row.id, row]));
+      this.collections = new Map(parsed.collections.map((row) => [row.id, row]));
+      this.placements = new Map(parsed.placements.map((row) => [row.id, row]));
+      this.latestReversibleByEntry = new Map(
+        (parsed.latestReversibleByEntry ?? []).map((row) => [row.entryId, row.placementId])
+      );
+      this.seededUsers = new Set(parsed.seededUsers ?? []);
+    } catch {
+      // Ignore invalid snapshot and continue with empty in-memory state.
+    }
+  }
+
+  private persistToDisk() {
+    const filePath = this.initOptions.persistenceFilePath;
+    if (!filePath) return;
+    const payload: PersistedNoteStateV1 = {
+      version: 1,
+      entries: [...this.entries.values()],
+      collections: [...this.collections.values()],
+      placements: [...this.placements.values()],
+      latestReversibleByEntry: [...this.latestReversibleByEntry.entries()].map(([entryId, placementId]) => ({
+        entryId,
+        placementId
+      })),
+      seededUsers: [...this.seededUsers.values()]
+    };
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+  }
 
   private ensureDefaultCollections(userId: string) {
     if (this.seededUsers.has(userId)) return;
     if (this.initOptions.seedDefaultCollections === false) {
       this.seededUsers.add(userId);
+      this.persistToDisk();
       return;
     }
     const now = new Date().toISOString();
     this.seedCollection(userId, { name: "Travel Plans", last_activity_at: now });
     this.seedCollection(userId, { name: "Work Sprint", last_activity_at: new Date(Date.now() - 16 * 60 * 1000).toISOString() });
     this.seededUsers.add(userId);
+    this.persistToDisk();
   }
 
   seedCollection(
@@ -152,6 +209,7 @@ export class InMemoryNoteRepository implements NoteRepository {
     const id = row.id ?? `col_${crypto.randomUUID()}`;
     const at = row.last_activity_at ?? new Date().toISOString();
     this.collections.set(id, { id, userId, name: row.name, last_activity_at: at });
+    this.persistToDisk();
     return id;
   }
 
@@ -177,6 +235,7 @@ export class InMemoryNoteRepository implements NoteRepository {
       contentImagePath,
       contentImageContext
     });
+    this.persistToDisk();
     return { id, type: inferredType, status: "draft", created_at };
   }
 
@@ -259,6 +318,7 @@ export class InMemoryNoteRepository implements NoteRepository {
     row.contentText = text;
     row.updated_at = new Date().toISOString();
     row.type = "text";
+    this.persistToDisk();
     return {
       id: row.id,
       type: row.type,
@@ -276,6 +336,7 @@ export class InMemoryNoteRepository implements NoteRepository {
     if (!row || row.userId !== userId) throw new Error("ENTRY_NOT_FOUND");
     this.entries.delete(entryId);
     this.latestReversibleByEntry.delete(entryId);
+    this.persistToDisk();
   }
 
   async getDraftTextPreview(userId: string, entryId: string): Promise<string | undefined> {
@@ -348,6 +409,7 @@ export class InMemoryNoteRepository implements NoteRepository {
       createdAt: now,
       undoExpiresAt: undo_expires_at
     });
+    this.persistToDisk();
 
     return {
       placement: {
@@ -406,6 +468,7 @@ export class InMemoryNoteRepository implements NoteRepository {
       createdAt: now,
       undoExpiresAt: undo_expires_at
     });
+    this.persistToDisk();
 
     return {
       placement: {
@@ -466,6 +529,7 @@ export class InMemoryNoteRepository implements NoteRepository {
       createdAt: now,
       undoExpiresAt: null
     });
+    this.persistToDisk();
 
     return {
       placement: {

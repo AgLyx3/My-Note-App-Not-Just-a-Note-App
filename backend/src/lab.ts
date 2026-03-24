@@ -477,6 +477,10 @@ export class LabService {
     return this.runs.get(runId) ?? null;
   }
 
+  listRuns(): LabRun[] {
+    return [...this.runs.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
   async loadDefaultDataset(runId: string): Promise<{ collections_created: number; cases_created: number }> {
     const run = this.runs.get(runId);
     if (!run) throw new Error("RUN_NOT_FOUND");
@@ -782,14 +786,28 @@ export class LabService {
     return trace;
   }
 
-  submitDecision(runId: string, input: Omit<LabDecision, "decision_id" | "run_id" | "created_at">): LabDecision {
+  async submitDecision(
+    runId: string,
+    input: Omit<LabDecision, "decision_id" | "run_id" | "created_at">
+  ): Promise<LabDecision> {
     const run = this.runs.get(runId);
     if (!run) throw new Error("RUN_NOT_FOUND");
+    const allowed = this.runBucketIds.get(runId) ?? new Set<string>();
+    let selectedCount: number | null = null;
+    if (input.selected_kind === "collection" && input.selected_collection_id && allowed.has(input.selected_collection_id)) {
+      const entries = await this.noteRepository.listCollectionEntries(run.user_id, input.selected_collection_id);
+      selectedCount = entries.length;
+    } else if (input.selected_kind === "create_new") {
+      selectedCount = null;
+    } else {
+      selectedCount = input.selected_collection_note_count ?? null;
+    }
     const row: LabDecision = {
       decision_id: `decision_${crypto.randomUUID()}`,
       run_id: runId,
       created_at: new Date().toISOString(),
-      ...input
+      ...input,
+      selected_collection_note_count: selectedCount
     };
     this.decisions.get(runId)?.push(row);
     this.persistToDisk();

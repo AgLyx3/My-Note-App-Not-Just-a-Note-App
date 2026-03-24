@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { ZodError, z } from "zod";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { createCaptureSchema } from "./capture-schema.js";
 import { extractTextRequestSchema } from "./extract-schema.js";
 import {
@@ -18,6 +20,7 @@ import { suggestionsRequestSchema } from "./suggestion-schema.js";
 import { SuggestionService, type SuggestionServiceOptions } from "./suggestion-service.js";
 import { extractTextWithOpenAI, OpenAINotConfiguredError } from "./openai-extract.js";
 import { LabService } from "./lab.js";
+import { TelemetryStore, type TelemetryEvent } from "./telemetry.js";
 
 function toErrorBody(code: string, message: string, details?: Record<string, unknown>) {
   return {
@@ -83,7 +86,9 @@ export interface BuildAppDeps {
 
 export function buildApp(deps?: BuildAppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
-  const noteRepository = deps?.noteRepository ?? new InMemoryNoteRepository();
+  const storagePath = resolve(fileURLToPath(new URL("../.data/note-state.json", import.meta.url)));
+  const noteRepository =
+    deps?.noteRepository ?? new InMemoryNoteRepository({ persistenceFilePath: storagePath });
   const idempotencyStore = deps?.idempotencyStore ?? new InMemoryIdempotencyStore();
   const suggestionService = new SuggestionService(noteRepository, {
     ...deps?.suggestionOptions,
@@ -91,6 +96,25 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
   });
   const extractImpl = deps?.extractTextFromImage ?? extractTextWithOpenAI;
   const labService = new LabService(noteRepository);
+  const telemetry = new TelemetryStore();
+  const dashboardToken = process.env.DASHBOARD_TOKEN?.trim() || null;
+
+  function track(event: { distinctId: string; event: string; properties?: Record<string, unknown> }) {
+    const row: TelemetryEvent = {
+      timestamp: new Date().toISOString(),
+      distinct_id: event.distinctId,
+      event: event.event,
+      properties: event.properties ?? {}
+    };
+    telemetry.record(row);
+  }
+
+  function requireDashboardAccess(request: FastifyRequest): boolean {
+    if (!dashboardToken) return true;
+    const raw = request.headers["x-dashboard-token"];
+    const provided = (Array.isArray(raw) ? raw[0] : raw) ?? "";
+    return provided === dashboardToken;
+  }
 
   app.post("/v1/extract-text", { bodyLimit: 15 * 1024 * 1024 }, async (request, reply) => {
     const userId = requireAuth(request.headers.authorization);
@@ -136,6 +160,16 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
     try {
       const body = createCaptureSchema.parse(request.body);
       const entry = await noteRepository.createDraft(body, userId);
+      track({
+        distinctId: userId,
+        event: "capture_created",
+        properties: {
+          entry_id: entry.id,
+          type: body.type,
+          text_length: body.type === "text" ? body.content.text.length : 0,
+          has_image_context: body.type === "text" ? Boolean(body.content.image_context) : false
+        }
+      });
       return reply.status(201).send({ entry });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -168,7 +202,30 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
       }
 
       const body = suggestionsRequestSchema.parse(request.body ?? {});
+      const started = Date.now();
+      track({
+        distinctId: userId,
+        event: "suggestions_requested",
+        properties: {
+          entry_id: request.params.entryId,
+          has_recent_hints: Boolean(body.hints?.recent_collection_ids?.length)
+        }
+      });
       const payload = await suggestionService.buildSuggestions(userId, request.params.entryId, body);
+      track({
+        distinctId: userId,
+        event: "suggestions_succeeded",
+        properties: {
+          entry_id: request.params.entryId,
+          source: payload.source,
+          confidence_score: payload.confidence.score,
+          confidence_label: payload.confidence.label,
+          top_kind: payload.top_option.kind,
+          top_score: payload.top_option.score,
+          alternatives_count: payload.alternatives.length,
+          latency_ms: Date.now() - started
+        }
+      });
       return reply.status(200).send(payload);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -272,6 +329,23 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
         try {
           const body = confirmBodySchema.parse(parsedBody);
           const result = await noteRepository.confirmPlacementStub(userId, entryId, body.selection);
+          let selectedCollectionNoteCount: number | null = null;
+          if (body.selection.kind === "collection") {
+            const entries = await noteRepository.listCollectionEntries(userId, body.selection.collection_id);
+            selectedCollectionNoteCount = entries.length;
+          }
+          track({
+            distinctId: userId,
+            event: "placement_confirmed",
+            properties: {
+              entry_id: entryId,
+              selected_kind: body.selection.kind,
+              selected_collection_id: body.selection.kind === "collection" ? body.selection.collection_id : null,
+              selected_collection_note_count: selectedCollectionNoteCount,
+              created_collection_name:
+                body.selection.kind === "create_new" ? body.selection.new_collection_name : null
+            }
+          });
           return { statusCode: 200, body: result };
         } catch (error) {
           const mapped = mapPlacementStubError(error);
@@ -490,6 +564,16 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
     }
   });
 
+  app.get("/v1/lab/runs", async (request, reply) => {
+    try {
+      const runs = labService.listRuns();
+      return reply.status(200).send({ runs });
+    } catch (error) {
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
   app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/datasets/default", async (request, reply) => {
     return reply.status(410).send(
       toErrorBody(
@@ -546,7 +630,7 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
           failure_reason: z.string().max(120).nullable().optional()
         })
         .parse(request.body ?? {});
-      const decision = labService.submitDecision(request.params.runId, {
+      const decision = await labService.submitDecision(request.params.runId, {
         trace_id: body.trace_id,
         selected_kind: body.selected_kind,
         selected_collection_id: body.selected_collection_id ?? null,
@@ -674,6 +758,48 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
       )
     );
   });
+
+  app.get<{ Querystring: { hours?: string } }>("/v1/metrics/summary", async (request, reply) => {
+    if (!requireDashboardAccess(request)) {
+      return reply.status(401).send(toErrorBody("UNAUTHORIZED", "Dashboard token is invalid"));
+    }
+    const windowHours = z.coerce.number().int().min(1).max(24 * 30).catch(24).parse(request.query.hours);
+    const summary = telemetry.getSummary(windowHours);
+    return reply.status(200).send({ summary });
+  });
+
+  app.get<{ Querystring: { hours?: string; limit?: string } }>("/v1/metrics/events", async (request, reply) => {
+    if (!requireDashboardAccess(request)) {
+      return reply.status(401).send(toErrorBody("UNAUTHORIZED", "Dashboard token is invalid"));
+    }
+    const windowHours = z.coerce.number().int().min(1).max(24 * 30).catch(24).parse(request.query.hours);
+    const limit = z.coerce.number().int().min(10).max(5000).catch(200).parse(request.query.limit);
+    const events = telemetry.listRecentEvents(windowHours, limit);
+    return reply.status(200).send({ events });
+  });
+
+  app.get<{ Querystring: { hours?: string; limit?: string } }>("/v1/metrics/production-traces", async (request, reply) => {
+    if (!requireDashboardAccess(request)) {
+      return reply.status(401).send(toErrorBody("UNAUTHORIZED", "Dashboard token is invalid"));
+    }
+    const windowHours = z.coerce.number().int().min(1).max(24 * 30).catch(24).parse(request.query.hours);
+    const limit = z.coerce.number().int().min(10).max(5000).catch(200).parse(request.query.limit);
+    const traces = telemetry.getProductionTraces(windowHours, limit);
+    return reply.status(200).send({ traces });
+  });
+
+  app.get<{ Querystring: { hours?: string; bucket_minutes?: string } }>(
+    "/v1/metrics/timeseries",
+    async (request, reply) => {
+      if (!requireDashboardAccess(request)) {
+        return reply.status(401).send(toErrorBody("UNAUTHORIZED", "Dashboard token is invalid"));
+      }
+      const windowHours = z.coerce.number().int().min(1).max(24 * 30).catch(24).parse(request.query.hours);
+      const bucketMinutes = z.coerce.number().int().min(5).max(24 * 60).catch(60).parse(request.query.bucket_minutes);
+      const points = telemetry.getTimeseries(windowHours, bucketMinutes);
+      return reply.status(200).send({ points });
+    }
+  );
 
   return app;
 }
