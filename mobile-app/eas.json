@@ -1,0 +1,32 @@
+{
+  "cli": {
+    "version": ">= 16.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "http://localhost:3001/v1",
+        "EXPO_PUBLIC_DEV_AUTH_TOKEN": "u1"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://my-note-app-not-just-a-note-app.onrender.com/v1",
+        "EXPO_PUBLIC_DEV_AUTH_TOKEN": "u1"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://my-note-app-not-just-a-note-app.onrender.com/v1",
+        "EXPO_PUBLIC_DEV_AUTH_TOKEN": "u1"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
