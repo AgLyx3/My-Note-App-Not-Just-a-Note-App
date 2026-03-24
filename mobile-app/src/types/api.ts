@@ -133,3 +133,11 @@ export interface CollectionEntrySummary {
 export interface UpdateEntryResponse {
   entry: CollectionEntrySummary;
 }
+
+export interface RenameCollectionResponse {
+  collection: {
+    id: string;
+    name: string;
+    last_activity_at: string;
+  };
+}

@@ -14,7 +14,7 @@ import {
   type IdempotencyStore
 } from "./idempotency.js";
 import { InMemoryNoteRepository, type NoteRepository } from "./note-repository.js";
-import { updateEntrySchema } from "./entry-mutation-schemas.js";
+import { renameCollectionSchema, updateEntrySchema } from "./entry-mutation-schemas.js";
 import { confirmBodySchema, moveBodySchema, undoBodySchema } from "./placement-mutation-schemas.js";
 import { suggestionsRequestSchema } from "./suggestion-schema.js";
 import { SuggestionService, type SuggestionServiceOptions } from "./suggestion-service.js";
@@ -517,6 +517,33 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
       }
       if (error instanceof Error && error.message === "ENTRY_NOT_FOUND") {
         return reply.status(404).send(toErrorBody("RESOURCE_NOT_FOUND", "Entry not found"));
+      }
+      return reply.status(500).send(toErrorBody("INTERNAL_ERROR", "Unexpected server error"));
+    }
+  });
+
+  app.patch<{ Params: { collectionId: string } }>("/v1/collections/:collectionId", async (request, reply) => {
+    const userId = requireAuth(request.headers.authorization);
+    if (!userId) {
+      return reply.status(401).send(toErrorBody("UNAUTHORIZED", "Authentication required"));
+    }
+
+    try {
+      const body = renameCollectionSchema.parse(request.body);
+      const collection = await noteRepository.renameCollection(userId, request.params.collectionId, body.name);
+      return reply.status(200).send({ collection });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const firstIssue = error.issues[0];
+        return reply.status(422).send(
+          toErrorBody("VALIDATION_ERROR", "Invalid request payload", {
+            field: firstIssue?.path?.join("."),
+            reason: firstIssue?.message
+          })
+        );
+      }
+      if (error instanceof Error && error.message === "COLLECTION_NOT_FOUND") {
+        return reply.status(404).send(toErrorBody("RESOURCE_NOT_FOUND", "Collection not found"));
       }
       return reply.status(500).send(toErrorBody("INTERNAL_ERROR", "Unexpected server error"));
     }

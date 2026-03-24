@@ -46,6 +46,7 @@ export interface NoteRepository {
   /** Last `limit` placed entries in collection, newest first — preview strings for ranking profile. */
   listRecentPlacedPreviews(userId: string, collectionId: string, limit: number): Promise<string[]>;
   updateEntryText(userId: string, entryId: string, text: string): Promise<CollectionEntrySummary>;
+  renameCollection(userId: string, collectionId: string, name: string): Promise<CollectionSummary>;
   deleteEntry(userId: string, entryId: string): Promise<void>;
   /** Text preview for draft text entries; used for suggested collection names. */
   getDraftTextPreview(userId: string, entryId: string): Promise<string | undefined>;
@@ -329,6 +330,16 @@ export class InMemoryNoteRepository implements NoteRepository {
       image_uri: row.contentImagePath,
       content_text: row.contentText
     };
+  }
+
+  async renameCollection(userId: string, collectionId: string, name: string): Promise<CollectionSummary> {
+    const row = this.collections.get(collectionId);
+    if (!row || row.userId !== userId) throw new Error("COLLECTION_NOT_FOUND");
+    row.name = name;
+    row.last_activity_at = new Date().toISOString();
+    this.persistToDisk();
+    const { userId: _u, ...pub } = row;
+    return pub;
   }
 
   async deleteEntry(userId: string, entryId: string): Promise<void> {

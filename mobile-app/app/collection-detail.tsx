@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { deleteEntry, listCollectionEntries, updateEntryText } from "../src/api/client";
+import { deleteEntry, listCollectionEntries, renameCollection, updateEntryText } from "../src/api/client";
 import { useCaptureStore } from "../src/store/capture-store";
 import { SectionTitle, SegmentedControl } from "../src/ui/primitives";
 
@@ -20,12 +20,43 @@ export default function CollectionDetailScreen() {
   const router = useRouter();
   const collectionId = useCaptureStore((s) => s.activeCollectionId);
   const collectionName = useCaptureStore((s) => s.activeCollectionName) ?? "Collection";
+  const setActiveCollectionName = useCaptureStore((s) => s.setActiveCollectionName);
   const textDraft = useCaptureStore((s) => s.textDraft);
   const setEntryId = useCaptureStore((s) => s.setEntryId);
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [editingCollectionName, setEditingCollectionName] = useState(false);
+  const [collectionNameDraft, setCollectionNameDraft] = useState(collectionName);
   const [viewTab, setViewTab] = useState<"current" | "organized">("current");
+  const goBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/(tabs)/gallery");
+  };
+
+  useEffect(() => {
+    if (!editingCollectionName) setCollectionNameDraft(collectionName);
+  }, [collectionName, editingCollectionName]);
+
+  const renameMutation = useMutation({
+    mutationFn: async () => {
+      if (!collectionId) throw new Error("Collection not found");
+      return renameCollection(collectionId, collectionNameDraft.trim());
+    },
+    onSuccess: async (result) => {
+      setActiveCollectionName(result.collection.name);
+      setCollectionNameDraft(result.collection.name);
+      setEditingCollectionName(false);
+      await queryClient.invalidateQueries({ queryKey: ["collections"] });
+      await queryClient.invalidateQueries({ queryKey: ["collection-entries", result.collection.id] });
+    },
+    onError: (error) => {
+      Alert.alert("Rename failed", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
 
   const editMutation = useMutation({
     mutationFn: async (params: { id: string; text: string }) => updateEntryText(params.id, params.text),
@@ -103,13 +134,67 @@ export default function CollectionDetailScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <SectionTitle
-          title={collectionName}
+          title={editingCollectionName ? "Edit collection" : collectionName}
           subtitle={
             entriesQuery.isLoading
               ? "Loading\u2026"
               : `${entries.length} note${entries.length !== 1 ? "s" : ""}`
           }
         />
+        <View className="mb-4 flex-row items-center gap-2">
+          <Pressable
+            onPress={goBack}
+            className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2"
+            style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
+          >
+            <Text className="text-sm font-medium text-zinc-700">Back</Text>
+          </Pressable>
+          {editingCollectionName ? (
+            <>
+              <TextInput
+                value={collectionNameDraft}
+                onChangeText={setCollectionNameDraft}
+                className="flex-1 rounded-xl border border-zinc-300 bg-zinc-50 px-3 py-2.5 text-base text-zinc-900"
+                placeholder="Collection name"
+                placeholderTextColor="#a1a1aa"
+                maxLength={120}
+                autoFocus
+              />
+              <Pressable
+                onPress={() => renameMutation.mutate()}
+                disabled={!collectionNameDraft.trim() || renameMutation.isPending}
+                className={`rounded-lg px-3 py-2 ${
+                  !collectionNameDraft.trim() || renameMutation.isPending ? "bg-zinc-200" : "bg-zinc-900"
+                }`}
+              >
+                <Text
+                  className={`text-sm font-medium ${
+                    !collectionNameDraft.trim() || renameMutation.isPending ? "text-zinc-400" : "text-zinc-50"
+                  }`}
+                >
+                  {renameMutation.isPending ? "Saving..." : "Save"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setCollectionNameDraft(collectionName);
+                  setEditingCollectionName(false);
+                }}
+                className="rounded-lg px-3 py-2"
+              >
+                <Text className="text-sm font-medium text-zinc-500">Cancel</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable
+              onPress={() => setEditingCollectionName(true)}
+              className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2"
+              style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
+            >
+              <Text className="text-sm font-medium text-zinc-700">Rename</Text>
+            </Pressable>
+          )}
+        </View>
 
         <SegmentedControl
           value={viewTab}

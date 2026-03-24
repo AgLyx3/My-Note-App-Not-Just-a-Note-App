@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { useEffect } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { confirmPlacement, getSuggestions } from "../src/api/client";
 import { useCaptureStore } from "../src/store/capture-store";
 import type { SuggestionOption } from "../src/types/api";
@@ -43,6 +43,14 @@ export default function ReviewScreen() {
   const setSuggestions = useCaptureStore((s) => s.setSuggestions);
   const setSelected = useCaptureStore((s) => s.setSelected);
   const prepareNewCapture = useCaptureStore((s) => s.prepareNewCapture);
+  const [newCollectionName, setNewCollectionName] = useState("");
+  const goBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/(tabs)/capture");
+  };
 
   const query = useQuery({
     queryKey: ["suggestions", entryId],
@@ -59,7 +67,10 @@ export default function ReviewScreen() {
       const selection =
         choice.kind === "collection"
           ? { kind: "collection" as const, collection_id: choice.collection.id }
-          : { kind: "create_new" as const, new_collection_name: choice.suggested_name };
+          : {
+              kind: "create_new" as const,
+              new_collection_name: (newCollectionName.trim() || choice.suggested_name).trim()
+            };
       return confirmPlacement(entryId, selection);
     },
     onSuccess: async (result) => {
@@ -80,6 +91,19 @@ export default function ReviewScreen() {
   useEffect(() => {
     if (query.data && !suggestions) setSuggestions(query.data);
   }, [query.data, suggestions, setSuggestions]);
+
+  const data = suggestions ?? query.data;
+  const options: SuggestionOption[] = data ? [data.top_option, ...data.alternatives] : [];
+  const active = (selected ?? data?.top_option) ?? null;
+  const suggestedCreateNew =
+    options.find((option) => option.kind === "create_new")?.suggested_name ??
+    (data?.top_option.kind === "create_new" ? data.top_option.suggested_name : "");
+
+  useEffect(() => {
+    if (!newCollectionName && suggestedCreateNew) {
+      setNewCollectionName(suggestedCreateNew);
+    }
+  }, [suggestedCreateNew, newCollectionName]);
 
   if (!entryId) {
     return (
@@ -108,12 +132,19 @@ export default function ReviewScreen() {
     );
   }
 
-  const data = suggestions ?? query.data!;
-  const options: SuggestionOption[] = [data.top_option, ...data.alternatives];
-  const active = selected ?? data.top_option;
+  const isCreateNewSelected = active?.kind === "create_new";
 
   return (
     <Screen>
+      <View className="mb-3 flex-row">
+        <Pressable
+          onPress={goBack}
+          className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2"
+          style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
+        >
+          <Text className="text-sm font-medium text-zinc-700">Back</Text>
+        </Pressable>
+      </View>
       <SectionTitle title="Place in collection" subtitle="Pick the best destination for this note." />
       <View className="mb-4 self-start rounded-full border border-zinc-300 bg-zinc-50 px-3 py-1">
         <Text className="text-xs text-zinc-600">
@@ -128,10 +159,23 @@ export default function ReviewScreen() {
           onPress={() => setSelected(option)}
         />
       ))}
+      {isCreateNewSelected ? (
+        <View className="mb-4">
+          <Text className="mb-2 text-xs font-medium uppercase text-zinc-500">New collection name</Text>
+          <TextInput
+            value={newCollectionName}
+            onChangeText={setNewCollectionName}
+            className="rounded-xl border border-zinc-300 bg-zinc-50 p-3 text-base text-zinc-900"
+            placeholder="Type collection name..."
+            placeholderTextColor="#a1a1aa"
+            maxLength={120}
+          />
+        </View>
+      ) : null}
       <PrimaryButton
         className="mt-auto"
         onPress={() => confirmMutation.mutate()}
-        disabled={confirmMutation.isPending}
+        disabled={confirmMutation.isPending || (isCreateNewSelected && newCollectionName.trim().length === 0)}
         label={confirmMutation.isPending ? "Confirming..." : "Confirm"}
       />
     </Screen>

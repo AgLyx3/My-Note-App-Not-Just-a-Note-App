@@ -7,7 +7,8 @@ import type {
   MoveEntryResponse,
   SuggestionsResponse,
   UndoPlacementResponse,
-  UpdateEntryResponse
+  UpdateEntryResponse,
+  RenameCollectionResponse
 } from "../types/api";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:3001/v1";
@@ -121,6 +122,13 @@ export async function updateEntryText(entryId: string, text: string): Promise<Up
 export async function deleteEntry(entryId: string): Promise<void> {
   await request(`/entries/${entryId}`, {
     method: "DELETE"
+  });
+}
+
+export async function renameCollection(collectionId: string, name: string): Promise<RenameCollectionResponse> {
+  return request<RenameCollectionResponse>(`/collections/${collectionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name })
   });
 }
 
