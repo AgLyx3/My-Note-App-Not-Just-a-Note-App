@@ -1,4 +1,5 @@
-import { Pressable, Text, View, type PressableProps, type ViewProps } from "react-native";
+import { Animated, Pressable, Text, View, type PressableProps, type ViewProps } from "react-native";
+import { useRef, useEffect } from "react";
 
 export function Screen({ className = "", ...props }: ViewProps & { className?: string }) {
   return <View className={`flex-1 bg-zinc-100 px-5 py-5 ${className}`.trim()} {...props} />;
@@ -6,6 +7,32 @@ export function Screen({ className = "", ...props }: ViewProps & { className?: s
 
 export function Card({ className = "", ...props }: ViewProps & { className?: string }) {
   return <View className={`rounded-3xl border border-zinc-200 bg-zinc-50 p-4 ${className}`.trim()} {...props} />;
+}
+
+function SegmentedPill({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
+  const bg = useRef(new Animated.Value(active ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(bg, { toValue: active ? 1 : 0, duration: 200, useNativeDriver: false }).start();
+  }, [active, bg]);
+
+  const backgroundColor = bg.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["transparent", "#18181b"]
+  });
+  const textColor = bg.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["#71717a", "#fafafa"]
+  });
+
+  return (
+    <Pressable onPress={onPress} className="flex-1" style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+      <Animated.View className="rounded-lg px-3 py-2.5" style={{ backgroundColor }}>
+        <Animated.Text className="text-center text-sm font-medium" style={{ color: textColor }}>
+          {label}
+        </Animated.Text>
+      </Animated.View>
+    </Pressable>
+  );
 }
 
 export function SegmentedControl({
@@ -18,19 +45,15 @@ export function SegmentedControl({
   onChange: (value: string) => void;
 }) {
   return (
-    <View className="mb-5 flex-row rounded-xl border border-zinc-300 bg-zinc-50 p-1">
-      {options.map((option) => {
-        const active = option.value === value;
-        return (
-          <Pressable
-            key={option.value}
-            onPress={() => onChange(option.value)}
-            className={`flex-1 rounded-lg px-3 py-2 ${active ? "bg-zinc-900" : "bg-transparent"}`}
-          >
-            <Text className={`text-center text-sm font-medium ${active ? "text-zinc-50" : "text-zinc-500"}`}>{option.label}</Text>
-          </Pressable>
-        );
-      })}
+    <View className="mb-5 flex-row rounded-xl border border-zinc-200 bg-zinc-100 p-1">
+      {options.map((option) => (
+        <SegmentedPill
+          key={option.value}
+          active={option.value === value}
+          label={option.label}
+          onPress={() => onChange(option.value)}
+        />
+      ))}
     </View>
   );
 }

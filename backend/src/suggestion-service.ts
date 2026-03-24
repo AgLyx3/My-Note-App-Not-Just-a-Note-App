@@ -1,4 +1,13 @@
 import { clampScore, CONFIDENCE_POLICY_VERSION, scoreToLabelV1 } from "./confidence-policy.js";
+import {
+  buildCollectionProfileText,
+  buildQueryEmbeddingText,
+  embedTextsDefault,
+  fusedScoresToDisplayScores,
+  rankCollectionsByEmbedding,
+  ROLLING_NOTE_LIMIT,
+  type RankedCollection
+} from "./embedding-rank.js";
 import type { CollectionSummary, NoteRepository } from "./note-repository.js";
 import type { SuggestionsRequest } from "./suggestion-schema.js";
 import { UrlEnrichmentService, type EnrichedUrl } from "./url-enrichment.js";
@@ -31,6 +40,11 @@ export interface SuggestionsResponseBody {
 
 export interface SuggestionServiceOptions {
   forceFallback?: boolean;
+  /**
+   * Override embedding batch (tests). When omitted, uses OpenAI if `OPENAI_API_KEY` is set,
+   * otherwise lexical vectors (Phase 1 local baseline).
+   */
+  embedBatch?: (texts: string[]) => Promise<number[][]>;
 }
 
 function suggestedNamesFromText(text: string | undefined): string[] {
@@ -90,7 +104,7 @@ export class SuggestionService {
       return this.buildColdStart(entryId, preview, generated_at);
     }
 
-    return this.buildModel(entryId, collections, body, preview, enrichedUrls, generated_at);
+    return this.buildModel(userId, entryId, collections, body, preview, enrichedUrls, generated_at);
   }
 
   private buildColdStart(entryId: string, preview: string | undefined, generated_at: string): SuggestionsResponseBody {
@@ -167,20 +181,25 @@ export class SuggestionService {
     };
   }
 
-  private buildModel(
+  private async buildProfileText(userId: string, c: CollectionSummary): Promise<string> {
+    const previews = await this.repo.listRecentPlacedPreviews(userId, c.id, ROLLING_NOTE_LIMIT);
+    return buildCollectionProfileText(c.name, previews);
+  }
+
+  private optionsFromRanking(
     entryId: string,
-    collections: CollectionSummary[],
-    body: SuggestionsRequest,
+    ranked: RankedCollection[],
+    displayScores: number[],
     preview: string | undefined,
     enrichedUrls: EnrichedUrl[],
-    generated_at: string
+    generated_at: string,
+    reasonBase: string
   ): SuggestionsResponseBody {
-    const ordered = orderCollections(collections, body.hints?.recent_collection_ids);
-    const collectionOptions: SuggestionOptionCollection[] = ordered.map((c, i) => ({
+    const collectionOptions: SuggestionOptionCollection[] = ranked.map((r, i) => ({
       kind: "collection",
-      collection: c,
+      collection: r.collection,
       rank: i + 1,
-      score: scoreCollection(i, false)
+      score: clampScore(displayScores[i] ?? 0.5)
     }));
     const top = collectionOptions[0]!;
     const topScore = top.score;
@@ -202,9 +221,57 @@ export class SuggestionService {
       },
       top_option: top,
       alternatives,
-      reason_short: withLinkHint("Based on your capture and recent activity.", enrichedUrls),
+      reason_short: withLinkHint(reasonBase, enrichedUrls),
       generated_at
     };
+  }
+
+  /**
+   * Phase 1: embed capture vs collection profiles (name + rolling previews), fuse with recency hints.
+   * On embedding failure when using OpenAI, falls back to pure recency heuristic.
+   */
+  private async buildModel(
+    userId: string,
+    entryId: string,
+    collections: CollectionSummary[],
+    body: SuggestionsRequest,
+    preview: string | undefined,
+    enrichedUrls: EnrichedUrl[],
+    generated_at: string
+  ): Promise<SuggestionsResponseBody> {
+    const embedBatch = this.options?.embedBatch ?? embedTextsDefault;
+    const queryText = (preview ?? "").trim() || "Notes";
+    const queryInput = buildQueryEmbeddingText(queryText);
+
+    try {
+      const profileTexts = await Promise.all(collections.map((c) => this.buildProfileText(userId, c)));
+      const inputs = [queryInput, ...profileTexts];
+      const vectors = await embedBatch(inputs);
+      if (vectors.length !== inputs.length) {
+        throw new Error("EMBED_BATCH_LENGTH_MISMATCH");
+      }
+      const queryVec = vectors[0]!;
+      const profileVecs = vectors.slice(1);
+      const ranked = rankCollectionsByEmbedding(
+        collections,
+        queryVec,
+        profileVecs,
+        body.hints?.recent_collection_ids
+      );
+      const displayScores = fusedScoresToDisplayScores(ranked.map((r) => r.fusedScore));
+      const reasonBase = "Ranked by similarity to your collections (name + recent notes).";
+      return this.optionsFromRanking(
+        entryId,
+        ranked,
+        displayScores,
+        preview,
+        enrichedUrls,
+        generated_at,
+        reasonBase
+      );
+    } catch {
+      return this.buildFallback(entryId, collections, body, preview, enrichedUrls, generated_at);
+    }
   }
 }
 

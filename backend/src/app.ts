@@ -17,6 +17,7 @@ import { confirmBodySchema, moveBodySchema, undoBodySchema } from "./placement-m
 import { suggestionsRequestSchema } from "./suggestion-schema.js";
 import { SuggestionService, type SuggestionServiceOptions } from "./suggestion-service.js";
 import { extractTextWithOpenAI, OpenAINotConfiguredError } from "./openai-extract.js";
+import { LabService } from "./lab.js";
 
 function toErrorBody(code: string, message: string, details?: Record<string, unknown>) {
   return {
@@ -74,6 +75,8 @@ export interface BuildAppDeps {
   noteRepository?: NoteRepository;
   idempotencyStore?: IdempotencyStore;
   suggestionOptions?: SuggestionServiceOptions;
+  /** Override suggestion embeddings (tests). */
+  embedBatch?: (texts: string[]) => Promise<number[][]>;
   /** Override vision OCR (tests); default uses OPENAI_API_KEY on the server. */
   extractTextFromImage?: (input: { base64: string; mimeType: string }) => Promise<string>;
 }
@@ -82,8 +85,12 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
   const noteRepository = deps?.noteRepository ?? new InMemoryNoteRepository();
   const idempotencyStore = deps?.idempotencyStore ?? new InMemoryIdempotencyStore();
-  const suggestionService = new SuggestionService(noteRepository, deps?.suggestionOptions);
+  const suggestionService = new SuggestionService(noteRepository, {
+    ...deps?.suggestionOptions,
+    ...(deps?.embedBatch ? { embedBatch: deps.embedBatch } : {})
+  });
   const extractImpl = deps?.extractTextFromImage ?? extractTextWithOpenAI;
+  const labService = new LabService(noteRepository);
 
   app.post("/v1/extract-text", { bodyLimit: 15 * 1024 * 1024 }, async (request, reply) => {
     const userId = requireAuth(request.headers.authorization);
@@ -455,6 +462,217 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
       }
       return reply.status(500).send(toErrorBody("INTERNAL_ERROR", "Unexpected server error"));
     }
+  });
+
+  app.post("/v1/lab/runs", async (request, reply) => {
+    try {
+      const body = z
+        .object({
+          tester_id: z.string().min(1).max(80).optional(),
+          algorithm_version: z.string().min(1).max(120).optional(),
+          dataset_source: z.enum(["default_fixture", "prompt_generated"]).optional()
+        })
+        .parse(request.body ?? {});
+      const run = labService.createRun(body);
+      return reply.status(201).send({ run });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const firstIssue = error.issues[0];
+        return reply.status(422).send(
+          toErrorBody("VALIDATION_ERROR", "Invalid request payload", {
+            field: firstIssue?.path?.join("."),
+            reason: firstIssue?.message
+          })
+        );
+      }
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/datasets/default", async (request, reply) => {
+    return reply.status(410).send(
+      toErrorBody(
+        "LAB_GENERATION_DISABLED",
+        "Synthetic dataset generation is disabled. Use manual bucket and note entry in the dashboard."
+      )
+    );
+  });
+
+  app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/datasets/generate", async (request, reply) => {
+    return reply.status(410).send(
+      toErrorBody(
+        "LAB_GENERATION_DISABLED",
+        "Synthetic dataset generation is disabled. Use manual bucket and note entry in the dashboard."
+      )
+    );
+  });
+
+  app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/capture-test", async (request, reply) => {
+    try {
+      const body = z
+        .object({
+          capture_text: z.string().min(1).max(5000),
+          hints: suggestionsRequestSchema.shape.hints.optional()
+        })
+        .parse(request.body ?? {});
+      const trace = await labService.runCaptureTest(request.params.runId, body);
+      return reply.status(200).send({ trace });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const firstIssue = error.issues[0];
+        return reply.status(422).send(
+          toErrorBody("VALIDATION_ERROR", "Invalid request payload", {
+            field: firstIssue?.path?.join("."),
+            reason: firstIssue?.message
+          })
+        );
+      }
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/decisions", async (request, reply) => {
+    try {
+      const body = z
+        .object({
+          trace_id: z.string().min(1),
+          selected_kind: z.enum(["collection", "create_new"]),
+          selected_collection_id: z.string().min(1).nullable().optional(),
+          selected_collection_note_count: z.number().int().min(0).nullable().optional(),
+          selected_rank: z.number().int().positive().nullable().optional(),
+          expected_collection_id: z.string().min(1).nullable().optional(),
+          failure_reason: z.string().max(120).nullable().optional()
+        })
+        .parse(request.body ?? {});
+      const decision = labService.submitDecision(request.params.runId, {
+        trace_id: body.trace_id,
+        selected_kind: body.selected_kind,
+        selected_collection_id: body.selected_collection_id ?? null,
+        selected_collection_note_count: body.selected_collection_note_count ?? null,
+        selected_rank: body.selected_rank ?? null,
+        expected_collection_id: body.expected_collection_id ?? null,
+        failure_reason: body.failure_reason ?? null
+      });
+      return reply.status(201).send({ decision });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const firstIssue = error.issues[0];
+        return reply.status(422).send(
+          toErrorBody("VALIDATION_ERROR", "Invalid request payload", {
+            field: firstIssue?.path?.join("."),
+            reason: firstIssue?.message
+          })
+        );
+      }
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.get<{ Params: { runId: string } }>("/v1/lab/runs/:runId/metrics", async (request, reply) => {
+    try {
+      const run = labService.getRun(request.params.runId);
+      if (!run) {
+        return reply.status(404).send(toErrorBody("RUN_NOT_FOUND", "Run not found"));
+      }
+      const metrics = labService.getMetrics(request.params.runId);
+      return reply.status(200).send({ run, metrics });
+    } catch (error) {
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.get<{ Params: { runId: string } }>("/v1/lab/runs/:runId/traces", async (request, reply) => {
+    try {
+      const run = labService.getRun(request.params.runId);
+      if (!run) {
+        return reply.status(404).send(toErrorBody("RUN_NOT_FOUND", "Run not found"));
+      }
+      return reply.status(200).send({
+        run,
+        traces: labService.listTraces(request.params.runId),
+        decisions: labService.listDecisions(request.params.runId),
+        cases: labService.listCases(request.params.runId)
+      });
+    } catch (error) {
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.get<{ Params: { runId: string } }>("/v1/lab/runs/:runId/state", async (request, reply) => {
+    try {
+      const run = labService.getRun(request.params.runId);
+      if (!run) {
+        return reply.status(404).send(toErrorBody("RUN_NOT_FOUND", "Run not found"));
+      }
+      const buckets = await labService.listBuckets(request.params.runId);
+      return reply.status(200).send({
+        run,
+        buckets,
+        cases: labService.listCases(request.params.runId)
+      });
+    } catch (error) {
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/buckets", async (request, reply) => {
+    try {
+      const body = z.object({ name: z.string().min(1).max(120) }).parse(request.body ?? {});
+      const bucket = await labService.addBucket(request.params.runId, body.name);
+      return reply.status(201).send({ bucket });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const firstIssue = error.issues[0];
+        return reply.status(422).send(
+          toErrorBody("VALIDATION_ERROR", "Invalid request payload", {
+            field: firstIssue?.path?.join("."),
+            reason: firstIssue?.message
+          })
+        );
+      }
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/notes", async (request, reply) => {
+    try {
+      const body = z
+        .object({
+          collection_id: z.string().min(1),
+          text: z.string().min(1).max(5000)
+        })
+        .parse(request.body ?? {});
+      const note = await labService.addNoteToBucket(request.params.runId, body);
+      return reply.status(201).send({ note });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const firstIssue = error.issues[0];
+        return reply.status(422).send(
+          toErrorBody("VALIDATION_ERROR", "Invalid request payload", {
+            field: firstIssue?.path?.join("."),
+            reason: firstIssue?.message
+          })
+        );
+      }
+      const mapped = LabService.mapError(error);
+      return reply.status(mapped.status).send(toErrorBody(mapped.code, mapped.message));
+    }
+  });
+
+  app.post<{ Params: { runId: string } }>("/v1/lab/runs/:runId/notes/generate", async (request, reply) => {
+    return reply.status(410).send(
+      toErrorBody(
+        "LAB_GENERATION_DISABLED",
+        "Synthetic note generation is disabled. Add notes manually in the dashboard."
+      )
+    );
   });
 
   return app;

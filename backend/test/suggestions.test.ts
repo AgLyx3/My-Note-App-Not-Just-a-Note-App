@@ -135,4 +135,58 @@ describe("POST /v1/captures/:entryId/suggestions", () => {
     expect(response.statusCode).toBe(403);
     expect(response.json().error.code).toBe("FORBIDDEN");
   });
+
+  it("returns fallback when embed batch throws", async () => {
+    const repo = new InMemoryNoteRepository();
+    repo.seedCollection("u1", { name: "Travel" });
+    const entry = await repo.createDraft({ type: "text", content: { text: "x" } }, "u1");
+    const app = buildApp({
+      noteRepository: repo,
+      embedBatch: async () => {
+        throw new Error("embed down");
+      }
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/captures/${entry.id}/suggestions`,
+      headers: { authorization: "Bearer u1" },
+      payload: {}
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.source).toBe("fallback");
+    expect(body.confidence.label).toBe("uncertain");
+  });
+
+  it("ranks by injected embeddings (semantic beats order)", async () => {
+    const repo = new InMemoryNoteRepository({ seedDefaultCollections: false });
+    const colMatch = repo.seedCollection("u1", { name: "Match", last_activity_at: "2026-03-01T12:00:00Z" });
+    const colOther = repo.seedCollection("u1", { name: "Other", last_activity_at: "2026-03-20T12:00:00Z" });
+    const entry = await repo.createDraft({ type: "text", content: { text: "query text" } }, "u1");
+    const basis = (i: number) => {
+      const v = new Array(8).fill(0);
+      v[i] = 1;
+      return v;
+    };
+    const app = buildApp({
+      noteRepository: repo,
+      // listCollections is newest-first: colOther then colMatch — profiles must align.
+      embedBatch: async (texts) => {
+        expect(texts.length).toBe(3);
+        return [basis(0), basis(1), basis(0)];
+      }
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/captures/${entry.id}/suggestions`,
+      headers: { authorization: "Bearer u1" },
+      payload: { hints: { recent_collection_ids: [colOther, colMatch] } }
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.source).toBe("model");
+    expect(body.top_option.kind).toBe("collection");
+    expect(body.top_option.collection.id).toBe(colMatch);
+    expect(body.reason_short).toContain("similarity");
+  });
 });

@@ -9,6 +9,8 @@ import { MAX_CAPTURE_TEXT_CHARS } from "../../src/constants/capture-limits";
 import { useCaptureStore } from "../../src/store/capture-store";
 import { Card, PrimaryButton, Screen, SectionTitle, SegmentedControl } from "../../src/ui/primitives";
 
+const MAX_IMAGE_CONTEXT_CHARS = 120;
+
 function showTextTooLongToast(context: "text" | "extracted") {
   console.warn(`[capture] text exceeds max length (${MAX_CAPTURE_TEXT_CHARS} chars)`, { context });
   Toast.show({
@@ -42,6 +44,7 @@ export default function CaptureTabScreen() {
   const [mode, setMode] = useState<"text" | "image">("text");
   const [extractedText, setExtractedText] = useState("");
   const [saveImageAlongside, setSaveImageAlongside] = useState(false);
+  const [imageContext, setImageContext] = useState("");
   const textDraft = useCaptureStore((s) => s.textDraft);
   const imagePath = useCaptureStore((s) => s.imagePath);
   const setTextDraft = useCaptureStore((s) => s.setTextDraft);
@@ -58,6 +61,7 @@ export default function CaptureTabScreen() {
       setImagePath(result.assets[0]?.uri);
       setExtractedText("");
       setSaveImageAlongside(false);
+      setImageContext("");
     }
   }
 
@@ -89,6 +93,9 @@ export default function CaptureTabScreen() {
               type: "text" as const,
               content: {
                 text: textForSubmit,
+                ...(imageContext.trim().length > 0
+                  ? { image_context: imageContext.trim().slice(0, MAX_IMAGE_CONTEXT_CHARS) }
+                  : {}),
                 ...(saveImageAlongside && imagePath ? { image_storage_path: imagePath } : {})
               }
             };
@@ -183,6 +190,20 @@ export default function CaptureTabScreen() {
                 placeholderTextColor="#a1a1aa"
                 textAlignVertical="top"
                 scrollEnabled
+              />
+            </View>
+          ) : null}
+
+          {extractedText.trim().length > 0 ? (
+            <View className="mt-4">
+              <Text className="mb-2 text-xs font-medium uppercase text-zinc-500">Context (optional)</Text>
+              <TextInput
+                value={imageContext}
+                onChangeText={(value) => setImageContext(value.slice(0, MAX_IMAGE_CONTEXT_CHARS))}
+                className="rounded-xl border border-zinc-300 bg-zinc-50 p-3 text-base text-zinc-900"
+                placeholder="Why save this? (e.g., friend X likes this, event to attend)"
+                placeholderTextColor="#a1a1aa"
+                maxLength={MAX_IMAGE_CONTEXT_CHARS}
               />
             </View>
           ) : null}

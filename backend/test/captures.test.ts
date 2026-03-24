@@ -73,6 +73,48 @@ describe("POST /v1/captures", () => {
     expect(response.json().entry.type).toBe("image");
   });
 
+  it("accepts image-derived text capture context up to 120 chars", async () => {
+    const app = buildApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/captures",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        type: "text",
+        content: {
+          text: "Contagious by Jonah Berger",
+          image_context: "Why save this? friend X likes this and recommended reading it next."
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().entry.type).toBe("text");
+  });
+
+  it("returns 422 when image context exceeds 120 chars", async () => {
+    const app = buildApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/captures",
+      headers: {
+        authorization: "Bearer test-token"
+      },
+      payload: {
+        type: "text",
+        content: {
+          text: "Event capture",
+          image_context: "x".repeat(121)
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.code).toBe("VALIDATION_ERROR");
+  });
+
   it("returns 422 when image storage_path is missing", async () => {
     const app = buildApp();
     const response = await app.inject({

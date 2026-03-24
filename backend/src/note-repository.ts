@@ -41,6 +41,8 @@ export interface NoteRepository {
   getEntryAccess(userId: string, entryId: string): Promise<EntryAccess>;
   listCollections(userId: string): Promise<CollectionSummary[]>;
   listCollectionEntries(userId: string, collectionId: string): Promise<CollectionEntrySummary[]>;
+  /** Last `limit` placed entries in collection, newest first — preview strings for ranking profile. */
+  listRecentPlacedPreviews(userId: string, collectionId: string, limit: number): Promise<string[]>;
   updateEntryText(userId: string, entryId: string, text: string): Promise<CollectionEntrySummary>;
   deleteEntry(userId: string, entryId: string): Promise<void>;
   /** Text preview for draft text entries; used for suggested collection names. */
@@ -98,6 +100,7 @@ interface StoredEntry extends CaptureEntry {
   userId: string;
   contentText?: string;
   contentImagePath?: string;
+  contentImageContext?: string;
 }
 
 interface StoredPlacement {
@@ -163,6 +166,7 @@ export class InMemoryNoteRepository implements NoteRepository {
         : input.type === "image"
           ? input.content.storage_path
           : undefined;
+    const contentImageContext = input.type === "text" ? input.content.image_context : undefined;
     this.entries.set(id, {
       id,
       userId,
@@ -170,7 +174,8 @@ export class InMemoryNoteRepository implements NoteRepository {
       status: "draft",
       created_at,
       contentText,
-      contentImagePath
+      contentImagePath,
+      contentImageContext
     });
     return { id, type: inferredType, status: "draft", created_at };
   }
@@ -178,7 +183,7 @@ export class InMemoryNoteRepository implements NoteRepository {
   async getEntry(userId: string, entryId: string): Promise<CaptureEntry | null> {
     const row = this.entries.get(entryId);
     if (!row || row.userId !== userId) return null;
-    const { userId: _u, contentText: _c, contentImagePath: _i, ...pub } = row;
+    const { userId: _u, contentText: _c, contentImagePath: _i, contentImageContext: _ctx, ...pub } = row;
     return pub;
   }
 
@@ -186,7 +191,7 @@ export class InMemoryNoteRepository implements NoteRepository {
     const row = this.entries.get(entryId);
     if (!row) return { status: "not_found" };
     if (row.userId !== userId) return { status: "forbidden" };
-    const { userId: _u, contentText: _c, contentImagePath: _i, ...pub } = row;
+    const { userId: _u, contentText: _c, contentImagePath: _i, contentImageContext: _ctx, ...pub } = row;
     return { status: "ok", entry: pub };
   }
 
@@ -214,6 +219,38 @@ export class InMemoryNoteRepository implements NoteRepository {
         image_uri: e.contentImagePath,
         content_text: e.contentText
       }));
+  }
+
+  async listRecentPlacedPreviews(userId: string, collectionId: string, limit: number): Promise<string[]> {
+    const collection = this.collections.get(collectionId);
+    if (!collection || collection.userId !== userId) return [];
+    const placed = [...this.entries.values()]
+      .filter(
+        (e) =>
+          e.userId === userId &&
+          e.collection_id === collectionId &&
+          e.status === "placed"
+      )
+      .sort((a, b) => (a.updated_at ?? a.created_at) < (b.updated_at ?? b.created_at) ? 1 : -1)
+      .slice(0, Math.max(0, limit));
+
+    return placed.map((e) => {
+      if (e.type === "text") {
+        const base = e.contentText?.trim() || "Text note";
+        const cap = 280;
+        const head = base.length > cap ? `${base.slice(0, cap)}…` : base;
+        if (e.contentImageContext?.trim()) {
+          return `${head}\n(Context: ${e.contentImageContext.trim()})`;
+        }
+        return head;
+      }
+      const ocr = e.contentText?.trim();
+      if (ocr) {
+        const cap = 280;
+        return ocr.length > cap ? `${ocr.slice(0, cap)}…` : ocr;
+      }
+      return "Image note";
+    });
   }
 
   async updateEntryText(userId: string, entryId: string, text: string): Promise<CollectionEntrySummary> {
@@ -244,6 +281,9 @@ export class InMemoryNoteRepository implements NoteRepository {
   async getDraftTextPreview(userId: string, entryId: string): Promise<string | undefined> {
     const row = this.entries.get(entryId);
     if (!row || row.userId !== userId) return undefined;
+    if (row.contentImageContext) {
+      return `${row.contentText ?? ""}\n\nContext: ${row.contentImageContext}`.trim();
+    }
     return row.contentText;
   }
 

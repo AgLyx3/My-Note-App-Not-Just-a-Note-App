@@ -1,0 +1,67 @@
+{
+  "collections": [
+    {
+      "name": "Travel",
+      "notes": [
+        "Flight confirmation to Lisbon",
+        "Hotel check-in Marina district",
+        "Renew passport before summer trip",
+        "Compare train vs flight to Barcelona"
+      ]
+    },
+    {
+      "name": "Work",
+      "notes": [
+        "Sprint planning backlog grooming",
+        "1:1 notes with manager career goals",
+        "Q3 roadmap draft for leadership review",
+        "Incident postmortem action items"
+      ]
+    },
+    {
+      "name": "Recipes",
+      "notes": [
+        "Sourdough hydration 75 percent overnight",
+        "Grocery list flour salt olive oil",
+        "Meal prep containers for weekday lunches",
+        "Try omurice technique from video"
+      ]
+    },
+    {
+      "name": "Health",
+      "notes": [
+        "Physical therapy exercises for knee",
+        "Sleep tracker average 6h need more",
+        "Vitamin D dosage question for doctor"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "travel_hotel",
+      "query": "cancel hotel reservation Tokyo cherry blossom week",
+      "expected_collection_name": "Travel"
+    },
+    {
+      "id": "work_roadmap",
+      "query": "send roadmap outline to VP before Friday",
+      "expected_collection_name": "Work"
+    },
+    {
+      "id": "recipe_bake",
+      "query": "need bread flour and yeast for weekend bake",
+      "expected_collection_name": "Recipes"
+    },
+    {
+      "id": "health_pt",
+      "query": "knee still hurts after PT session",
+      "expected_collection_name": "Health"
+    },
+    {
+      "id": "recency_nudge",
+      "query": "quick follow up tomorrow",
+      "expected_collection_name": "Work",
+      "recent_collection_names": ["Work", "Travel"]
+    }
+  ]
+}

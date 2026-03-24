@@ -7,7 +7,9 @@ const textCaptureSchema = z.object({
   content: z.object({
     text: z.string().trim().min(1).max(10000),
     /** When set, the image is kept alongside the extracted/saved text (e.g. local URI or storage path). */
-    image_storage_path: z.string().trim().min(1).optional()
+    image_storage_path: z.string().trim().min(1).optional(),
+    /** Optional context from image-derived capture flow; capped to keep typing light. */
+    image_context: z.string().trim().min(1).max(120).optional()
   }),
   client_context: z
     .object({

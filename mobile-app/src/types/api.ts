@@ -15,6 +15,8 @@ export interface CreateCaptureRequest {
     text: string;
     /** When set, keep the image alongside the text note (e.g. gallery thumbnail). */
     image_storage_path?: string;
+    /** Optional image-only capture context from image flow. */
+    image_context?: string;
   };
 }
 
