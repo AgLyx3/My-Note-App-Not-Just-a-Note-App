@@ -116,6 +116,31 @@ export function buildApp(deps?: BuildAppDeps): FastifyInstance {
     return provided === dashboardToken;
   }
 
+  function isMetricsPath(url: string): boolean {
+    return url.startsWith("/v1/metrics/");
+  }
+
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.method === "OPTIONS" && isMetricsPath(request.url)) {
+      reply
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET,OPTIONS")
+        .header("Access-Control-Allow-Headers", "Content-Type,x-dashboard-token")
+        .status(204);
+      return reply.send();
+    }
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (isMetricsPath(request.url)) {
+      reply
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET,OPTIONS")
+        .header("Access-Control-Allow-Headers", "Content-Type,x-dashboard-token");
+    }
+    return payload;
+  });
+
   app.post("/v1/extract-text", { bodyLimit: 15 * 1024 * 1024 }, async (request, reply) => {
     const userId = requireAuth(request.headers.authorization);
     if (!userId) {

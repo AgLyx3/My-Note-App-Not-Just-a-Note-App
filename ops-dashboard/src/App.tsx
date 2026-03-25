@@ -20,6 +20,10 @@ function fmtTs(iso: string): string {
 export function App() {
   const [hours, setHours] = useState<number>(DEFAULT_WINDOW_HOURS);
   const [token, setToken] = useState<string>("");
+  const [apiBaseUrl, setApiBaseUrl] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem("ops.apiBaseUrl") ?? "";
+  });
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [events, setEvents] = useState<TelemetryEvent[]>([]);
@@ -31,9 +35,9 @@ export function App() {
     setIsLoading(true);
     try {
       const [s, e, traces] = await Promise.all([
-        fetchSummary(hours, token),
-        fetchEvents(hours, DEFAULT_LIMIT, token),
-        fetchProductionTraces(hours, DEFAULT_LIMIT, token)
+        fetchSummary(hours, token, apiBaseUrl),
+        fetchEvents(hours, DEFAULT_LIMIT, token, apiBaseUrl),
+        fetchProductionTraces(hours, DEFAULT_LIMIT, token, apiBaseUrl)
       ]);
       setSummary(s);
       setEvents(e);
@@ -52,13 +56,18 @@ export function App() {
   }, [hours]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("ops.apiBaseUrl", apiBaseUrl);
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
     if (!autoRefresh) return;
     const id = window.setInterval(() => {
       void refresh();
     }, 10000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh, hours, token]);
+  }, [autoRefresh, hours, token, apiBaseUrl]);
 
   const lastEvents = useMemo(() => [...events].reverse(), [events]);
 
@@ -87,6 +96,15 @@ export function App() {
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder="matches backend DASHBOARD_TOKEN"
+          />
+        </label>
+        <label>
+          Backend URL (Render/local)
+          <input
+            type="text"
+            value={apiBaseUrl}
+            onChange={(e) => setApiBaseUrl(e.target.value)}
+            placeholder="https://your-backend.onrender.com"
           />
         </label>
         <label className="checkbox">

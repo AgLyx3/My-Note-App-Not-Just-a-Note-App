@@ -20,7 +20,14 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="review" options={{ title: "Review Sheet" }} />
+          <Stack.Screen
+            name="review"
+            options={{
+              title: "Review Sheet",
+              headerBackTitle: "",
+              headerBackButtonDisplayMode: "minimal"
+            }}
+          />
           <Stack.Screen
             name="collection-detail"
             options={{

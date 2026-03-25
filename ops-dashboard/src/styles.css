@@ -47,6 +47,7 @@ body {
 
 .controls input[type="number"],
 .controls input[type="password"],
+.controls input[type="text"],
 .controls select {
   border: 1px solid #d1d5db;
   border-radius: 8px;

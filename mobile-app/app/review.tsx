@@ -44,13 +44,6 @@ export default function ReviewScreen() {
   const setSelected = useCaptureStore((s) => s.setSelected);
   const prepareNewCapture = useCaptureStore((s) => s.prepareNewCapture);
   const [newCollectionName, setNewCollectionName] = useState("");
-  const goBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-      return;
-    }
-    router.replace("/(tabs)/capture");
-  };
 
   const query = useQuery({
     queryKey: ["suggestions", entryId],
@@ -136,15 +129,6 @@ export default function ReviewScreen() {
 
   return (
     <Screen>
-      <View className="mb-3 flex-row">
-        <Pressable
-          onPress={goBack}
-          className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2"
-          style={({ pressed }) => ({ opacity: pressed ? 0.75 : 1 })}
-        >
-          <Text className="text-sm font-medium text-zinc-700">Back</Text>
-        </Pressable>
-      </View>
       <SectionTitle title="Place in collection" subtitle="Pick the best destination for this note." />
       <View className="mb-4 self-start rounded-full border border-zinc-300 bg-zinc-50 px-3 py-1">
         <Text className="text-xs text-zinc-600">

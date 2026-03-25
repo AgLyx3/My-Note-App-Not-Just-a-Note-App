@@ -9,6 +9,7 @@ Deployable metrics dashboard for the Notes App ranking flow.
 2. Start dashboard:
    - `npm run dev:ops-dashboard`
 3. Open the shown Vite URL (default `http://localhost:5175`).
+4. If your app traffic goes to Render, set **Backend URL** in dashboard to your Render API URL.
 
 ## What it shows
 
@@ -31,6 +32,8 @@ The dashboard reads:
 - `GET /v1/metrics/production-traces?hours=24&limit=100`
 
 If `DASHBOARD_TOKEN` is set in backend env, pass it in `x-dashboard-token`.
+
+If dashboard is hosted on a different origin than backend, set backend CORS to allow dashboard origin.
 
 ## Render deployment
 
