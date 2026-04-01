@@ -4,9 +4,12 @@ import type { ProductionTrace, TelemetryEvent, TelemetrySummary } from "./types"
 
 const DEFAULT_WINDOW_HOURS = 24;
 const DEFAULT_LIMIT = 100;
+const DEFAULT_BACKEND_URL = "https://my-note-app-not-just-a-note-app.onrender.com";
 
-function pct(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+function pct(value: unknown): string {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return "n/a";
+  return `${(n * 100).toFixed(1)}%`;
 }
 
 function fmtMs(value: number): string {
@@ -17,12 +20,18 @@ function fmtTs(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
+function fmtFixed(value: unknown, digits = 3): string {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return "n/a";
+  return n.toFixed(digits);
+}
+
 export function App() {
   const [hours, setHours] = useState<number>(DEFAULT_WINDOW_HOURS);
   const [token, setToken] = useState<string>("");
   const [apiBaseUrl, setApiBaseUrl] = useState<string>(() => {
     if (typeof window === "undefined") return "";
-    return window.localStorage.getItem("ops.apiBaseUrl") ?? "";
+    return window.localStorage.getItem("ops.apiBaseUrl") ?? DEFAULT_BACKEND_URL;
   });
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
@@ -142,6 +151,18 @@ export function App() {
               <p>{pct(summary.suggestion_success_rate)}</p>
             </article>
             <article className="card">
+              <h3>Existing Bucket Rate</h3>
+              <p>{pct(summary.existing_bucket_rate)}</p>
+            </article>
+            <article className="card">
+              <h3>Create-new Rate</h3>
+              <p>{pct(summary.create_new_rate)}</p>
+            </article>
+            <article className="card">
+              <h3>Accept@3</h3>
+              <p>{pct(summary.accept_at_3)}</p>
+            </article>
+            <article className="card">
               <h3>Fallback Rate</h3>
               <p>{pct(summary.fallback_rate)}</p>
             </article>
@@ -151,7 +172,11 @@ export function App() {
             </article>
             <article className="card">
               <h3>Avg Confidence</h3>
-              <p>{summary.avg_confidence_score.toFixed(3)}</p>
+              <p>{fmtFixed(summary.avg_confidence_score, 3)}</p>
+            </article>
+            <article className="card">
+              <h3>MRR (selected)</h3>
+              <p>{fmtFixed((summary as any).mrr_selected, 3)}</p>
             </article>
           </section>
 
@@ -198,7 +223,9 @@ export function App() {
                           {t.selected_kind
                             ? t.selected_kind === "create_new"
                               ? "create_new"
-                              : `${t.selected_collection_id ?? "collection"} (${t.selected_collection_note_count ?? "n/a"} notes)`
+                              : `${t.selected_collection_id ?? "collection"} (${t.selected_collection_note_count ?? "n/a"} notes)${
+                                  t.selected_suggested_rank ? ` | accept@${t.selected_suggested_rank}` : ""
+                                }`
                             : "not confirmed"}
                         </div>
                       </div>

@@ -12,3 +12,6 @@ node_modules/
 # Logs
 *.log
 npm-debug.*
+
+# Build outputs
+ops-dashboard/dist/

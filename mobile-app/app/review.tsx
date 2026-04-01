@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { confirmPlacement, getSuggestions } from "../src/api/client";
 import { useCaptureStore } from "../src/store/capture-store";
 import type { SuggestionOption } from "../src/types/api";
@@ -86,7 +86,14 @@ export default function ReviewScreen() {
   }, [query.data, suggestions, setSuggestions]);
 
   const data = suggestions ?? query.data;
-  const options: SuggestionOption[] = data ? [data.top_option, ...data.alternatives] : [];
+  const options: SuggestionOption[] = data
+    ? (() => {
+        const all = [data.top_option, ...data.alternatives];
+        const createNew = all.filter((o) => o.kind === "create_new");
+        const rest = all.filter((o) => o.kind !== "create_new");
+        return [...createNew, ...rest];
+      })()
+    : [];
   const active = (selected ?? data?.top_option) ?? null;
   const suggestedCreateNew =
     options.find((option) => option.kind === "create_new")?.suggested_name ??
@@ -129,35 +136,42 @@ export default function ReviewScreen() {
 
   return (
     <Screen>
-      <SectionTitle title="Place in collection" subtitle="Pick the best destination for this note." />
-      <View className="mb-4 self-start rounded-full border border-zinc-300 bg-zinc-50 px-3 py-1">
-        <Text className="text-xs text-zinc-600">
-        Confidence: {data.confidence.label} ({data.source})
-        </Text>
-      </View>
-      {options.map((option, index) => (
-        <OptionRow
-          key={`${option.kind}-${index}`}
-          option={option}
-          active={active === option}
-          onPress={() => setSelected(option)}
-        />
-      ))}
-      {isCreateNewSelected ? (
-        <View className="mb-4">
-          <Text className="mb-2 text-xs font-medium uppercase text-zinc-500">New collection name</Text>
-          <TextInput
-            value={newCollectionName}
-            onChangeText={setNewCollectionName}
-            className="rounded-xl border border-zinc-300 bg-zinc-50 p-3 text-base text-zinc-900"
-            placeholder="Type collection name..."
-            placeholderTextColor="#a1a1aa"
-            maxLength={120}
-          />
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ paddingBottom: 24 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <SectionTitle title="Place in collection" subtitle="Pick the best destination for this note." />
+        <View className="mb-4 self-start rounded-full border border-zinc-300 bg-zinc-50 px-3 py-1">
+          <Text className="text-xs text-zinc-600">
+            Confidence: {data.confidence.label} ({data.source})
+          </Text>
         </View>
-      ) : null}
+        {options.map((option, index) => (
+          <OptionRow
+            key={`${option.kind}-${index}`}
+            option={option}
+            active={active === option}
+            onPress={() => setSelected(option)}
+          />
+        ))}
+        {isCreateNewSelected ? (
+          <View className="mb-4">
+            <Text className="mb-2 text-xs font-medium uppercase text-zinc-500">New collection name</Text>
+            <TextInput
+              value={newCollectionName}
+              onChangeText={setNewCollectionName}
+              className="rounded-xl border border-zinc-300 bg-zinc-50 p-3 text-base text-zinc-900"
+              placeholder="Type collection name..."
+              placeholderTextColor="#a1a1aa"
+              maxLength={120}
+            />
+          </View>
+        ) : null}
+      </ScrollView>
       <PrimaryButton
-        className="mt-auto"
+        className="mt-3"
         onPress={() => confirmMutation.mutate()}
         disabled={confirmMutation.isPending || (isCreateNewSelected && newCollectionName.trim().length === 0)}
         label={confirmMutation.isPending ? "Confirming..." : "Confirm"}

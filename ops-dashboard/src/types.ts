@@ -17,6 +17,10 @@ export interface TelemetrySummary {
   p95_latency_ms: number;
   avg_confidence_score: number;
   top_kind_distribution: { collection: number; create_new: number };
+  existing_bucket_rate: number;
+  create_new_rate: number;
+  accept_at_3: number;
+  mrr_selected: number;
 }
 
 export interface ProductionTrace {
@@ -36,5 +40,7 @@ export interface ProductionTrace {
   selected_kind: "collection" | "create_new" | null;
   selected_collection_id: string | null;
   selected_collection_note_count: number | null;
+  suggested_collection_ids: string[] | null;
+  selected_suggested_rank: number | null;
 }
 

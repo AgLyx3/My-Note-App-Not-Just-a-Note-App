@@ -1,6 +1,5 @@
-import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { resolve, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { getPool } from "./db/client.js";
+import { telemetryEvents } from "./db/schema.js";
 
 export interface TelemetryEvent {
   timestamp: string;
@@ -21,6 +20,10 @@ export interface TelemetrySummary {
   p95_latency_ms: number;
   avg_confidence_score: number;
   top_kind_distribution: { collection: number; create_new: number };
+  existing_bucket_rate: number;
+  create_new_rate: number;
+  accept_at_3: number;
+  mrr_selected: number;
 }
 
 export interface TelemetryTimeseriesPoint {
@@ -49,6 +52,8 @@ export interface ProductionTrace {
   selected_kind: "collection" | "create_new" | null;
   selected_collection_id: string | null;
   selected_collection_note_count: number | null;
+  suggested_collection_ids: string[] | null;
+  selected_suggested_rank: number | null;
 }
 
 function percentile(values: number[], p: number): number {
@@ -58,59 +63,105 @@ function percentile(values: number[], p: number): number {
   return sorted[idx] ?? 0;
 }
 
-function dateKey(iso: string): string {
-  return iso.slice(0, 10);
-}
-
 export class TelemetryStore {
-  private readonly dirPath: string;
+  private initialized = false;
 
   constructor() {
-    const here = dirname(fileURLToPath(import.meta.url));
-    this.dirPath = resolve(here, "../.telemetry-data");
-    mkdirSync(this.dirPath, { recursive: true });
+    // No work here; initialize lazily so telemetry never blocks startup.
   }
 
-  record(event: TelemetryEvent) {
+  private async ensureReady() {
+    if (this.initialized) return;
+    this.initialized = true;
+    const pool = getPool();
+    if (!pool) return;
     try {
-      const file = join(this.dirPath, `${dateKey(event.timestamp)}.jsonl`);
-      const line = JSON.stringify(event);
-      appendFileSync(file, line + "\n", "utf8");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS telemetry_events (
+          id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          timestamp TIMESTAMPTZ NOT NULL,
+          distinct_id TEXT NOT NULL,
+          event TEXT NOT NULL,
+          properties JSONB NOT NULL
+        );
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS telemetry_events_ts_idx ON telemetry_events (timestamp);`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS telemetry_events_event_ts_idx ON telemetry_events (event, timestamp);`);
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS telemetry_events_entry_id_idx ON telemetry_events ((properties->>'entry_id')) WHERE properties ? 'entry_id';`
+      );
     } catch {
       // Non-fatal; telemetry should not affect product behavior.
     }
   }
 
-  listRecentEvents(windowHours = 24, maxEvents = 1000): TelemetryEvent[] {
-    const now = Date.now();
-    const fromTs = now - windowHours * 60 * 60 * 1000;
-    const files = readdirSync(this.dirPath)
-      .filter((f) => f.endsWith(".jsonl"))
-      .sort();
-    const rows: TelemetryEvent[] = [];
-    for (const file of files) {
-      const content = readFileSync(join(this.dirPath, file), "utf8");
-      for (const line of content.split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line) as TelemetryEvent;
-          const ts = new Date(parsed.timestamp).getTime();
-          if (!Number.isFinite(ts) || ts < fromTs) continue;
-          rows.push(parsed);
-        } catch {
-          // Skip malformed lines.
-        }
-      }
+  record(event: TelemetryEvent) {
+    try {
+      // Fire-and-forget.
+      void this.recordAsync(event);
+    } catch {
+      // Non-fatal; telemetry should not affect product behavior.
     }
-    rows.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    if (rows.length > maxEvents) {
-      return rows.slice(rows.length - maxEvents);
-    }
-    return rows;
   }
 
-  getSummary(windowHours = 24): TelemetrySummary {
-    const events = this.listRecentEvents(windowHours, 50_000);
+  private async recordAsync(event: TelemetryEvent) {
+    await this.ensureReady();
+    const pool = getPool();
+    if (!pool) return;
+    try {
+      const db = (await import("./db/client.js")).getDb?.() ?? null;
+      // Avoid circular import issues by using pool directly when db isn't available.
+      if (!db) {
+        await pool.query(
+          `INSERT INTO telemetry_events (timestamp, distinct_id, event, properties) VALUES ($1, $2, $3, $4::jsonb)`,
+          [event.timestamp, event.distinct_id, event.event, JSON.stringify(event.properties ?? {})]
+        );
+        return;
+      }
+      await db.insert(telemetryEvents).values({
+        timestamp: new Date(event.timestamp),
+        distinctId: event.distinct_id,
+        event: event.event,
+        properties: (event.properties ?? {}) as Record<string, unknown>
+      });
+    } catch {
+      // Non-fatal.
+    }
+  }
+
+  async listRecentEvents(windowHours = 24, maxEvents = 1000): Promise<TelemetryEvent[]> {
+    await this.ensureReady();
+    const pool = getPool();
+    if (!pool) return [];
+    const now = Date.now();
+    const fromIso = new Date(now - windowHours * 60 * 60 * 1000).toISOString();
+    try {
+      // Fetch newest first then reverse to match previous ascending behavior.
+      const res = await pool.query(
+        `SELECT timestamp, distinct_id, event, properties
+         FROM telemetry_events
+         WHERE timestamp >= $1
+         ORDER BY timestamp DESC
+         LIMIT $2`,
+        [fromIso, Math.max(1, maxEvents)]
+      );
+      const rows = res.rows
+        .map((r) => ({
+          timestamp: new Date(r.timestamp).toISOString(),
+          distinct_id: String(r.distinct_id ?? ""),
+          event: String(r.event ?? ""),
+          properties: (r.properties ?? {}) as Record<string, unknown>
+        }))
+        .filter((e) => e.timestamp && e.distinct_id && e.event);
+      rows.reverse();
+      return rows;
+    } catch {
+      return [];
+    }
+  }
+
+  async getSummary(windowHours = 24): Promise<TelemetrySummary> {
+    const events = await this.listRecentEvents(windowHours, 50_000);
     const captures = events.filter((e) => e.event === "capture_created");
     const requested = events.filter((e) => e.event === "suggestions_requested");
     const succeeded = events.filter((e) => e.event === "suggestions_succeeded");
@@ -124,6 +175,16 @@ export class TelemetryStore {
       .filter((x) => Number.isFinite(x));
     const topCollection = succeeded.filter((e) => String(e.properties.top_kind ?? "") === "collection").length;
     const topCreateNew = succeeded.filter((e) => String(e.properties.top_kind ?? "") === "create_new").length;
+    const selectedExisting = confirmed.filter((e) => String(e.properties.selected_kind ?? "") === "collection").length;
+    const selectedCreateNew = confirmed.filter((e) => String(e.properties.selected_kind ?? "") === "create_new").length;
+
+    const traces = await this.getProductionTraces(windowHours, 50_000);
+    const judged = traces.filter((t) => t.selected_kind === "collection" && typeof t.selected_suggested_rank === "number");
+    const acceptAt3 = judged.length ? judged.filter((t) => (t.selected_suggested_rank ?? 999) <= 3).length / judged.length : 0;
+    const mrr =
+      judged.length
+        ? judged.reduce((s, t) => s + (t.selected_suggested_rank ? 1 / t.selected_suggested_rank : 0), 0) / judged.length
+        : 0;
 
     return {
       window_hours: windowHours,
@@ -140,13 +201,17 @@ export class TelemetryStore {
       top_kind_distribution: {
         collection: topCollection,
         create_new: topCreateNew
-      }
+      },
+      existing_bucket_rate: confirmed.length ? selectedExisting / confirmed.length : 0,
+      create_new_rate: confirmed.length ? selectedCreateNew / confirmed.length : 0,
+      accept_at_3: acceptAt3,
+      mrr_selected: mrr
     };
   }
 
-  getTimeseries(windowHours = 24, bucketMinutes = 60): TelemetryTimeseriesPoint[] {
+  async getTimeseries(windowHours = 24, bucketMinutes = 60): Promise<TelemetryTimeseriesPoint[]> {
     const safeBucketMinutes = Math.max(1, Math.min(24 * 60, Math.floor(bucketMinutes)));
-    const events = this.listRecentEvents(windowHours, 100_000);
+    const events = await this.listRecentEvents(windowHours, 100_000);
     const now = Date.now();
     const startMs = now - windowHours * 60 * 60 * 1000;
     const bucketMs = safeBucketMinutes * 60 * 1000;
@@ -201,8 +266,8 @@ export class TelemetryStore {
     return buckets;
   }
 
-  getProductionTraces(windowHours = 24, limit = 200): ProductionTrace[] {
-    const events = this.listRecentEvents(windowHours, 100_000);
+  async getProductionTraces(windowHours = 24, limit = 200): Promise<ProductionTrace[]> {
+    const events = await this.listRecentEvents(windowHours, 100_000);
     const byEntry = new Map<string, ProductionTrace>();
 
     const ensure = (entryId: string, distinctId: string): ProductionTrace => {
@@ -224,7 +289,9 @@ export class TelemetryStore {
         latency_ms: null,
         selected_kind: null,
         selected_collection_id: null,
-        selected_collection_note_count: null
+        selected_collection_note_count: null,
+        suggested_collection_ids: null,
+        selected_suggested_rank: null
       };
       byEntry.set(entryId, row);
       return row;
@@ -260,6 +327,10 @@ export class TelemetryStore {
         row.alternatives_count = Number.isFinite(alternatives) ? alternatives : null;
         const latency = Number(event.properties.latency_ms);
         row.latency_ms = Number.isFinite(latency) ? latency : null;
+        const suggestedIdsRaw = event.properties.suggested_collection_ids;
+        if (Array.isArray(suggestedIdsRaw) && suggestedIdsRaw.every((x) => typeof x === "string")) {
+          row.suggested_collection_ids = suggestedIdsRaw;
+        }
       } else if (event.event === "placement_confirmed") {
         row.placement_confirmed_at = event.timestamp;
         const selectedKind = String(event.properties.selected_kind ?? "");
@@ -272,6 +343,13 @@ export class TelemetryStore {
         row.selected_collection_note_count = Number.isFinite(selectedCollectionNoteCount)
           ? selectedCollectionNoteCount
           : null;
+      }
+    }
+
+    for (const t of byEntry.values()) {
+      if (t.selected_kind === "collection" && t.selected_collection_id && Array.isArray(t.suggested_collection_ids)) {
+        const idx = t.suggested_collection_ids.indexOf(t.selected_collection_id);
+        t.selected_suggested_rank = idx >= 0 ? idx + 1 : null;
       }
     }
 
